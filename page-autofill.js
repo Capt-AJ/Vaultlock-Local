@@ -105,7 +105,16 @@
       return false;
     }
 
-    const success = fillCredentials(message.username ?? "", message.password ?? "");
+    const username = String(message.username ?? "");
+    const password = String(message.password ?? "");
+
+    // reject absurdly large values to avoid memory abuse
+    if (username.length > 1024 || password.length > 1024) {
+      sendResponse({ success: false });
+      return false;
+    }
+
+    const success = fillCredentials(username, password);
     sendResponse({ success });
     return false;
   });

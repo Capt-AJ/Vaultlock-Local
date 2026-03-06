@@ -5,11 +5,13 @@
 
 (() => {
   const session = {
-    masterPassword: "",
+    // after derivation we only keep the CryptoKey; the raw password is cleared
+    vaultKey: null,
     entries: [],
     searchText: "",
     editingId: null,
     clipboardTimer: null,
+    autoLockTimer: null,
   };
 
   const strengthScale = [
@@ -85,7 +87,7 @@
   }
 
   function eraseUnlockedState() {
-    session.masterPassword = "";
+    session.vaultKey = null; // drop reference to the derived key
     session.entries = [];
     session.searchText = "";
     session.editingId = null;
@@ -107,6 +109,19 @@
 
   function makeId() {
     return Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  }
+
+  // constant-time string comparison to avoid leaking information via timing attacks
+  function secureCompare(a, b) {
+    const encoder = new TextEncoder();
+    const ua = encoder.encode(a);
+    const ub = encoder.encode(b);
+    if (ua.length !== ub.length) return false;
+    let diff = 0;
+    for (let i = 0; i < ua.length; i++) {
+      diff |= ua[i] ^ ub[i];
+    }
+    return diff === 0;
   }
 
   function escapeMarkup(text) {
@@ -207,6 +222,8 @@
   }
 
   function buildPassword({ length, lower, upper, digits, symbols }) {
+    // enforce sane limits
+    length = Math.min(Math.max(length, 8), 128);
     const sourceSets = [];
     if (lower) sourceSets.push("abcdefghijklmnopqrstuvwxyz");
     if (upper) sourceSets.push("ABCDEFGHIJKLMNOPQRSTUVWXYZ");
@@ -241,7 +258,10 @@
   }
 
   async function saveSessionEntries() {
-    await VaultRepository.writeVault(session.entries, session.masterPassword);
+    if (!session.vaultKey) {
+      throw new Error("Vault key unavailable; re‑unlock required.");
+    }
+    await VaultRepository.writeVault(session.entries, session.vaultKey);
   }
 
   function flashRowStatus(entryId, message, tone) {
@@ -265,13 +285,14 @@
       clearTimeout(session.clipboardTimer);
     }
 
+    // clear the clipboard after a short interval; shorter reduces exposure
     session.clipboardTimer = setTimeout(async () => {
       try {
         await navigator.clipboard.writeText("");
       } catch (_error) {
-        // Ignore clipboard permission or focus issues during delayed clear.
+        // ignore any errors (permissions, focus, etc.)
       }
-    }, 30000);
+    }, 10000); // 10 seconds
   }
 
   async function copySecretText(text) {
@@ -385,17 +406,18 @@
       return;
     }
 
-    if (candidate !== confirmation) {
+    if (!secureCompare(candidate, confirmation)) {
       ui.gateError.textContent = "Master passwords do not match.";
       return;
     }
 
-    session.masterPassword = candidate;
+    session.vaultKey = await VaultRepository.deriveKey(candidate);
     session.entries = [];
-    await VaultRepository.writeVault(session.entries, session.masterPassword);
+    await VaultRepository.writeVault(session.entries, session.vaultKey);
     clearAllForms();
     showVaultScreen();
     drawEntries();
+    resetAutoLockTimer();
   }
 
   async function unlockVault(event) {
@@ -407,18 +429,21 @@
       return;
     }
 
-    const loaded = await VaultRepository.readVault(candidate);
+    // derive key first, then try decrypting vault; we need the key even if decryption fails
+    const key = await VaultRepository.deriveKey(candidate);
+    const loaded = await VaultRepository.readVault(key);
     if (loaded === null) {
       ui.gateError.textContent = "Incorrect master password or corrupted vault";
       ui.unlockMaster.select();
       return;
     }
 
-    session.masterPassword = candidate;
+    session.vaultKey = key;
     session.entries = loaded;
     ui.unlockForm.reset();
     showVaultScreen();
     drawEntries();
+    resetAutoLockTimer();
   }
 
   async function saveRecord(event) {
@@ -429,8 +454,13 @@
     const password = ui.secretValue.value;
     const notes = ui.extraNotes.value.trim();
 
-    if (!site || !username || !password) {
+    // simple length bounds to avoid unbounded storage abuse.
+    if (site.length === 0 || username.length === 0 || password.length === 0) {
       ui.editorStatus.textContent = "Site, username, and password are required.";
+      return;
+    }
+    if (site.length > 256 || username.length > 256 || password.length > 256) {
+      ui.editorStatus.textContent = "Field values are too long.";
       return;
     }
 
@@ -492,13 +522,20 @@
     drawEntries();
     const exists = await VaultRepository.vaultExists();
     showAuthScreen(exists ? "unlock" : "create");
+    // stop auto-lock timer while locked
+    if (session.autoLockTimer) {
+      clearTimeout(session.autoLockTimer);
+      session.autoLockTimer = null;
+    }
   }
 
+  // start-up logic includes auto-lock event registration
   async function boot() {
     ui.lengthBadge.textContent = ui.lengthRange.value;
     refreshStrength("");
     const exists = await VaultRepository.vaultExists();
     showAuthScreen(exists ? "unlock" : "create");
+    registerAutoLockEvents();
   }
 
   ui.createForm.addEventListener("submit", (event) => {
@@ -506,6 +543,30 @@
       ui.gateError.textContent = error.message || "Unable to create the vault.";
     });
   });
+
+  // activity resets the auto-lock timer when the vault is unlocked
+  function resetAutoLockTimer() {
+    if (session.autoLockTimer) {
+      clearTimeout(session.autoLockTimer);
+    }
+    // five minute inactivity lock
+    session.autoLockTimer = setTimeout(() => {
+      relockVault().catch(() => {});
+    }, 5 * 60 * 1000);
+  }
+
+  function registerAutoLockEvents() {
+    const events = ["click", "input", "keydown", "mousemove"];
+    events.forEach((evt) => {
+      document.addEventListener(evt, resetAutoLockTimer, { passive: true });
+    });
+
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") {
+        relockVault().catch(() => {});
+      }
+    });
+  }
 
   ui.unlockForm.addEventListener("submit", (event) => {
     unlockVault(event).catch((error) => {
