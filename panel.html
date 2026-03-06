@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VaultLock Local</title>
+    <link rel="stylesheet" href="panel.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section id="gate" class="card">
+        <div id="create-view" class="auth-view hidden">
+          <div class="header-copy">
+            <h1>Create your vault</h1>
+            <p>This vault stays on this browser profile and never syncs to a server.</p>
+          </div>
+          <div class="notice">
+            If the master password is lost, the vault cannot be recovered.
+          </div>
+          <form id="create-form" class="column-form">
+            <label for="create-master">Master password</label>
+            <input id="create-master" type="password" autocomplete="new-password" required />
+
+            <label for="confirm-master">Confirm master password</label>
+            <input id="confirm-master" type="password" autocomplete="new-password" required />
+
+            <button type="submit" class="btn btn-primary">Create vault</button>
+          </form>
+        </div>
+
+        <div id="unlock-view" class="auth-view hidden">
+          <div class="header-copy">
+            <h1>Unlock vault</h1>
+            <p>Enter your master password to decrypt the local vault.</p>
+          </div>
+          <form id="unlock-form" class="column-form">
+            <label for="unlock-master">Master password</label>
+            <input id="unlock-master" type="password" autocomplete="current-password" required />
+            <button type="submit" class="btn btn-primary">Unlock</button>
+          </form>
+        </div>
+
+        <p id="gate-error" class="status status-error" aria-live="polite"></p>
+      </section>
+
+      <section id="workspace" class="card hidden">
+        <div class="toolbar">
+          <input id="filter-input" type="search" placeholder="Search by site or username" />
+          <button id="lock-vault" type="button" class="btn btn-secondary">Lock</button>
+        </div>
+
+        <div class="section-heading">
+          <h2>Saved logins</h2>
+          <span id="results-meta" class="meta-text"></span>
+        </div>
+
+        <div id="record-list" class="record-list" aria-live="polite"></div>
+
+        <section class="editor-block">
+          <div class="section-heading">
+            <h2 id="editor-title">New login</h2>
+            <button id="abort-edit" type="button" class="btn btn-ghost hidden">Cancel</button>
+          </div>
+
+          <form id="record-form" class="column-form">
+            <input id="record-id" type="hidden" />
+
+            <label for="site-name">Site</label>
+            <input id="site-name" type="text" placeholder="example.com" required />
+
+            <label for="account-name">Username</label>
+            <input id="account-name" type="text" placeholder="name@example.com" required />
+
+            <label for="secret-value">Password</label>
+            <div class="secret-row">
+              <input id="secret-value" type="password" required />
+              <button id="toggle-secret" type="button" class="btn btn-secondary btn-small">Show</button>
+            </div>
+
+            <div class="strength-panel">
+              <div class="strength-rail">
+                <div id="strength-fill" class="strength-fill"></div>
+              </div>
+              <span id="strength-copy" class="meta-text">Strength: Very Weak</span>
+            </div>
+
+            <label for="extra-notes">Notes</label>
+            <textarea id="extra-notes" rows="3" placeholder="Optional notes"></textarea>
+
+            <button type="submit" class="btn btn-primary">Save login</button>
+            <p id="editor-status" class="meta-text" aria-live="polite"></p>
+          </form>
+        </section>
+
+        <section class="generator-block">
+          <div class="section-heading">
+            <h2>Password generator</h2>
+            <span id="length-badge" class="meta-text">20</span>
+          </div>
+
+          <label for="length-range">Length</label>
+          <input id="length-range" type="range" min="8" max="32" value="20" />
+
+          <div class="option-grid">
+            <label class="option-pill"><input id="opt-lower" type="checkbox" checked /> Lowercase</label>
+            <label class="option-pill"><input id="opt-upper" type="checkbox" checked /> Uppercase</label>
+            <label class="option-pill"><input id="opt-digits" type="checkbox" checked /> Digits</label>
+            <label class="option-pill"><input id="opt-symbols" type="checkbox" checked /> Symbols</label>
+          </div>
+
+          <label for="generator-output">Generated password</label>
+          <textarea id="generator-output" rows="2" readonly></textarea>
+
+          <div class="button-row">
+            <button id="make-password" type="button" class="btn btn-primary">Generate & use</button>
+            <button id="copy-generated" type="button" class="btn btn-secondary">Copy generated</button>
+          </div>
+          <p id="generator-status" class="meta-text" aria-live="polite"></p>
+        </section>
+      </section>
+    </main>
+
+    <script src="vault-crypto.js"></script>
+    <script src="vault-repository.js"></script>
+    <script src="panel-controller.js"></script>
+  </body>
+</html>
