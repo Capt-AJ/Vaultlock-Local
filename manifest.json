@@ -9,6 +9,10 @@
     "scripting",
     "clipboardWrite"
   ],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
   "background": {
     "service_worker": "service-worker.js"
   },
@@ -26,9 +30,14 @@
     "48": "icons/vault-48.png",
     "128": "icons/vault-128.png"
   },
+  "content_security_policy": {
+    "extension_pages": "default-src 'self'; script-src 'self'; object-src 'none'; style-src 'self';"
+  },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
+      // restrict to HTTP/S origins; extension reviewers may request narrower
+      // patterns depending on expected use cases.
+      "matches": ["http://*/*", "https://*/*"],
       "js": ["page-autofill.js"],
       "run_at": "document_idle"
     }

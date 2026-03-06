@@ -23,7 +23,7 @@ A fully client-side, encrypted password vault designed for Chromium-based browse
 
 - **Clipboard management**
   - Copy password to clipboard with visual confirmation.
-  - Clipboard auto-clears after 30 seconds.
+  - Clipboard auto-clears after 10 seconds.
 
 - **Autofill support**
   - Content script fills compatible login forms when requested from the popup.
@@ -32,10 +32,20 @@ A fully client-side, encrypted password vault designed for Chromium-based browse
 ## Security & Crypto
 
 - Uses PBKDF2 (SHA-256, 310k iterations, 16-byte salt stored in base64).
+- The master password is converted into a `CryptoKey`; the raw string is wiped immediately.
 - AES-GCM 256-bit encryption of the vault JSON (IV concatenated and encoded).
+- Cryptographic helpers expose both password‑based and key‑based APIs to minimise
+  exposure of secrets.
+- Salt is persisted once; all key derivation uses the same random salt.
+- Clipboard contents are cleared automatically after 10 seconds.
+- Content Security Policy restricts the popup to `self` and disallows inline scripts.
+- Host permissions and content script patterns are limited to HTTP/S origins.
+- Auto‑lock timer logs the user out after 5 minutes of inactivity or when the
+  popup loses focus or visibility.
 - All cryptographic operations use `crypto.subtle` in the Web Crypto API.
-- Master password only resides in memory while vault is unlocked.
-- Documented security limitations in comments.
+- Master password only resides in memory briefly; it is never stored or sent
+  anywhere.
+- Security limitations are documented in comments within the source.
 
 ## Project Structure
 ```
