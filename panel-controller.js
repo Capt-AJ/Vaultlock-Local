@@ -14,6 +14,8 @@
     autoLockTimer: null,
   };
 
+  const CLIPBOARD_CLEAR_MS = 5000;
+
   const strengthScale = [
     { label: "Very Weak", color: "#ef4444", width: "18%" },
     { label: "Weak", color: "#f97316", width: "36%" },
@@ -91,6 +93,11 @@
     session.entries = [];
     session.searchText = "";
     session.editingId = null;
+
+    if (session.clipboardTimer) {
+      clearTimeout(session.clipboardTimer);
+      session.clipboardTimer = null;
+    }
   }
 
   function clearAllForms() {
@@ -105,6 +112,50 @@
 
   function nowIso() {
     return new Date().toISOString();
+  }
+
+  function normalizeOrigin(value) {
+    const raw = String(value || "").trim();
+    if (!raw) {
+      return "";
+    }
+
+    const candidate = /^[a-z]+:\/\//i.test(raw) ? raw : `https://${raw}`;
+    try {
+      const parsed = new URL(candidate);
+      if (parsed.protocol !== "https:") {
+        return "";
+      }
+      return parsed.origin;
+    } catch (_error) {
+      return "";
+    }
+  }
+
+  function normalizeEntry(entry) {
+    const normalized = {
+      ...entry,
+      id: String(entry.id || makeId()),
+      site: String(entry.site || "").trim(),
+      username: String(entry.username || "").trim(),
+      password: String(entry.password || ""),
+      notes: String(entry.notes || ""),
+      createdAt: entry.createdAt || nowIso(),
+      updatedAt: entry.updatedAt || nowIso(),
+    };
+
+    normalized.origin = normalizeOrigin(entry.origin || normalized.site);
+    return normalized;
+  }
+
+  function sanitizeLoadedEntries(entries) {
+    if (!Array.isArray(entries)) {
+      return [];
+    }
+
+    return entries
+      .map((item) => normalizeEntry(item))
+      .filter((entry) => entry.site && entry.username && entry.password);
   }
 
   function makeId() {
@@ -254,7 +305,19 @@
   }
 
   function randomIndex(limit) {
-    return crypto.getRandomValues(new Uint32Array(1))[0] % limit;
+    if (!Number.isInteger(limit) || limit <= 0) {
+      throw new Error("Invalid random limit.");
+    }
+
+    const max = 0x100000000;
+    const threshold = max - (max % limit);
+    const sample = new Uint32Array(1);
+
+    do {
+      crypto.getRandomValues(sample);
+    } while (sample[0] >= threshold);
+
+    return sample[0] % limit;
   }
 
   async function saveSessionEntries() {
@@ -292,7 +355,20 @@
       } catch (_error) {
         // ignore any errors (permissions, focus, etc.)
       }
-    }, 10000); // 10 seconds
+    }, CLIPBOARD_CLEAR_MS);
+  }
+
+  async function clearClipboardNow() {
+    if (session.clipboardTimer) {
+      clearTimeout(session.clipboardTimer);
+      session.clipboardTimer = null;
+    }
+
+    try {
+      await navigator.clipboard.writeText("");
+    } catch (_error) {
+      // best-effort clear only
+    }
   }
 
   async function copySecretText(text) {
@@ -332,10 +408,31 @@
       throw new Error("No active tab available.");
     }
 
+    const tabUrl = typeof tab.url === "string" ? tab.url : "";
+    let tabOrigin = "";
+    try {
+      const parsed = new URL(tabUrl);
+      tabOrigin = parsed.origin;
+      if (parsed.protocol !== "https:") {
+        throw new Error("Autofill is restricted to HTTPS pages.");
+      }
+    } catch (_error) {
+      throw new Error("Cannot verify the current tab origin for autofill.");
+    }
+
+    if (!entry.origin) {
+      throw new Error("This entry has no trusted origin. Edit and save it first.");
+    }
+
+    if (entry.origin !== tabOrigin) {
+      throw new Error(`Origin mismatch. Expected ${entry.origin}.`);
+    }
+
     const response = await messageTab(tab.id, {
       type: "AUTOFILL_ACTIVE_PAGE",
       username: entry.username,
       password: entry.password,
+      expectedOrigin: entry.origin,
     });
 
     if (!response?.success) {
@@ -398,7 +495,7 @@
 
   async function createVault(event) {
     event.preventDefault();
-    const candidate = ui.createMaster.value;
+    let candidate = ui.createMaster.value;
     const confirmation = ui.confirmMaster.value;
 
     if (candidate.length < 8) {
@@ -411,9 +508,9 @@
       return;
     }
 
-    session.vaultKey = await VaultRepository.deriveKey(candidate);
+    session.vaultKey = await VaultRepository.createVault(candidate, []);
     session.entries = [];
-    await VaultRepository.writeVault(session.entries, session.vaultKey);
+    candidate = "";
     clearAllForms();
     showVaultScreen();
     drawEntries();
@@ -422,24 +519,26 @@
 
   async function unlockVault(event) {
     event.preventDefault();
-    const candidate = ui.unlockMaster.value;
+    let candidate = ui.unlockMaster.value;
 
     if (!candidate) {
       ui.gateError.textContent = "Enter the master password.";
       return;
     }
 
-    // derive key first, then try decrypting vault; we need the key even if decryption fails
-    const key = await VaultRepository.deriveKey(candidate);
-    const loaded = await VaultRepository.readVault(key);
-    if (loaded === null) {
+    let unlocked;
+    try {
+      unlocked = await VaultRepository.unlockVault(candidate);
+    } catch (_error) {
       ui.gateError.textContent = "Incorrect master password or corrupted vault";
       ui.unlockMaster.select();
       return;
     }
+    candidate = "";
 
-    session.vaultKey = key;
-    session.entries = loaded;
+    session.vaultKey = unlocked.key;
+    session.entries = sanitizeLoadedEntries(unlocked.entries);
+    await saveSessionEntries();
     ui.unlockForm.reset();
     showVaultScreen();
     drawEntries();
@@ -464,6 +563,7 @@
       return;
     }
 
+    const normalizedOrigin = normalizeOrigin(site);
     const foundIndex = session.entries.findIndex((entry) => entry.id === session.editingId);
     if (foundIndex >= 0) {
       session.entries[foundIndex] = {
@@ -472,6 +572,7 @@
         username,
         password,
         notes,
+        origin: normalizedOrigin || session.entries[foundIndex].origin || "",
         updatedAt: nowIso(),
       };
       ui.editorStatus.textContent = "Entry updated.";
@@ -483,6 +584,7 @@
         username,
         password,
         notes,
+        origin: normalizedOrigin,
         createdAt: timestamp,
         updatedAt: timestamp,
       });
@@ -517,6 +619,7 @@
   }
 
   async function relockVault() {
+    await clearClipboardNow();
     clearAllForms();
     eraseUnlockedState();
     drawEntries();
@@ -546,6 +649,10 @@
 
   // activity resets the auto-lock timer when the vault is unlocked
   function resetAutoLockTimer() {
+    if (!session.vaultKey) {
+      return;
+    }
+
     if (session.autoLockTimer) {
       clearTimeout(session.autoLockTimer);
     }
@@ -565,6 +672,10 @@
       if (document.visibilityState === "hidden") {
         relockVault().catch(() => {});
       }
+    });
+
+    window.addEventListener("beforeunload", () => {
+      clearClipboardNow().catch(() => {});
     });
   }
 

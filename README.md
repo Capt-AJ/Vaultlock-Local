@@ -31,20 +31,25 @@ A fully client-side, encrypted password vault designed for Chromium-based browse
 
 ## Security & Crypto
 
-- Uses PBKDF2 (SHA-256, 310k iterations, 16-byte salt stored in base64).
+- Uses PBKDF2 (SHA-256, 600k iterations, 16-byte salt stored in base64).
 - The master password is converted into a `CryptoKey`; the raw string is wiped immediately.
-- AES-GCM 256-bit encryption of the vault JSON (IV concatenated and encoded).
+- AES-GCM 256-bit encryption of the vault JSON with authenticated metadata (AAD).
 - Cryptographic helpers expose both password‑based and key‑based APIs to minimise
   exposure of secrets.
-- Salt is persisted once; all key derivation uses the same random salt.
-- Clipboard contents are cleared automatically after 10 seconds.
+- KDF salt and key are rotated on each successful unlock.
+- Clipboard contents are cleared automatically after 5 seconds (best effort).
 - Content Security Policy restricts the popup to `self` and disallows inline scripts.
-- Host permissions and content script patterns are limited to HTTP/S origins.
+- Host permissions and content script patterns are limited to HTTPS origins.
 - Auto‑lock timer logs the user out after 5 minutes of inactivity or when the
   popup loses focus or visibility.
 - All cryptographic operations use `crypto.subtle` in the Web Crypto API.
 - Master password only resides in memory briefly; it is never stored or sent
   anywhere.
+- Vault storage is versioned and includes authenticated headers to detect tampering.
+- Legacy vault data is migrated forward automatically on first unlock.
+- Service worker scrubs sensitive keys from `chrome.storage.sync` as a guardrail.
+- Autofill is origin-locked: credentials are only filled when the active tab origin
+  matches the entry's trusted origin.
 - Security limitations are documented in comments within the source.
 
 ## Project Structure
@@ -74,12 +79,13 @@ password-manager-extension/
 - The extension avoids external dependencies; all code is vanilla JavaScript.
 - To modify styles, edit `panel.css` and reload the extension.
 - JS logic is modular; cryptography is in `vault-crypto.js` and storage in `vault-repository.js`.
-- The manifest declares minimal permissions: `storage`, `activeTab`, `scripting`, `clipboardWrite`.
+- The manifest declares minimal permissions: `storage`, `tabs`, `clipboardWrite`.
 
 ## Limitations
 - No synchronization across devices; vault remains local to the browser profile.
 - If the master password is forgotten or the vault file becomes corrupted, data is lost.
 - Security relies on the integrity of the browser and device; malware/keyloggers can compromise secrets.
+- Browser profile backups performed outside the extension (OS/browser backup tooling) are outside extension control.
 
 ## License
 Licensed under MIT. Use at your own risk.

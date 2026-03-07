@@ -1,4 +1,19 @@
 (() => {
+  function isExpectedOrigin(expectedOrigin) {
+    if (!expectedOrigin || typeof expectedOrigin !== "string") {
+      return false;
+    }
+
+    try {
+      if (window.location.protocol !== "https:") {
+        return false;
+      }
+      return new URL(expectedOrigin).origin === window.location.origin;
+    } catch (_error) {
+      return false;
+    }
+  }
+
   function collectInputs(selectors) {
     const found = [];
     const seen = new Set();
@@ -48,16 +63,6 @@
   }
 
   function locateIdentityField(passwordField) {
-    const active = document.activeElement;
-    if (
-      active instanceof HTMLInputElement &&
-      ["text", "email", "search", "tel", "url"].includes(active.type) &&
-      !active.disabled &&
-      !active.readOnly
-    ) {
-      return active;
-    }
-
     const candidates = collectInputs([
       'input[autocomplete="username"]',
       'input[type="email"]',
@@ -68,8 +73,7 @@
       'input[id*="mail" i]',
       'input[id*="login" i]',
       'input[placeholder*="email" i]',
-      'input[placeholder*="user" i]',
-      'input[type="text"]'
+      'input[placeholder*="user" i]'
     ]);
 
     if (!passwordField) {
@@ -102,6 +106,11 @@
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type !== "AUTOFILL_ACTIVE_PAGE") {
+      return false;
+    }
+
+    if (!isExpectedOrigin(message.expectedOrigin)) {
+      sendResponse({ success: false });
       return false;
     }
 

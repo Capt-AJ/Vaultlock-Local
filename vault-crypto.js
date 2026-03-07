@@ -1,5 +1,5 @@
 const VaultCrypto = (() => {
-  const KDF_ROUNDS = 310000;
+  const KDF_ROUNDS = 600000;
   const SALT_BYTES = 16;
   const IV_BYTES = 12;
   const KEY_BITS = 256;
@@ -33,10 +33,9 @@ const VaultCrypto = (() => {
   }
 
   async function importPassword(password) {
-    // encode password to a temporary buffer so we can erase it after use.
     const buffer = encoder.encode(password);
     try {
-      return crypto.subtle.importKey(
+      return await crypto.subtle.importKey(
         "raw",
         buffer,
         { name: "PBKDF2" },
@@ -44,18 +43,24 @@ const VaultCrypto = (() => {
         ["deriveKey"]
       );
     } finally {
-      // overwrite sensitive bytes
       buffer.fill(0);
     }
   }
 
-  async function deriveVaultKey(masterPassword, saltBase64) {
+  async function deriveVaultKey(masterPassword, saltBase64, iterations = KDF_ROUNDS) {
+    if (!masterPassword || typeof masterPassword !== "string") {
+      throw new Error("Master password is required.");
+    }
+    if (!saltBase64 || typeof saltBase64 !== "string") {
+      throw new Error("Vault salt is missing.");
+    }
+
     const material = await importPassword(masterPassword);
     return crypto.subtle.deriveKey(
       {
         name: "PBKDF2",
         hash: "SHA-256",
-        iterations: KDF_ROUNDS,
+        iterations,
         salt: fromBase64(saltBase64),
       },
       material,
@@ -68,36 +73,22 @@ const VaultCrypto = (() => {
     );
   }
 
-  // derive a key suitable for encrypting/decrypting vault data. callers can cache the
-  // resulting CryptoKey and wipe the password string from memory immediately after.
-  async function deriveVaultKey(masterPassword, saltBase64) {
-    const material = await importPassword(masterPassword);
-    return crypto.subtle.deriveKey(
-      {
-        name: "PBKDF2",
-        hash: "SHA-256",
-        iterations: KDF_ROUNDS,
-        salt: fromBase64(saltBase64),
-      },
-      material,
-      {
-        name: "AES-GCM",
-        length: KEY_BITS,
-      },
-      false,
-      ["encrypt", "decrypt"]
-    );
+  function buildAadBytes(aadText) {
+    if (!aadText) {
+      return null;
+    }
+    return encoder.encode(aadText);
   }
 
-  // new helper that encrypts plaintext using an already-derived CryptoKey. this keeps the
-  // vault repository logic separate from password handling and allows the UI to forget the
-  // master password after the key is created.
-  async function sealTextWithKey(plainText, key) {
+  async function sealTextWithKey(plainText, key, aadText = "") {
     const iv = randomBytes(IV_BYTES);
+    const aadBytes = buildAadBytes(aadText);
+
     const cipherBuffer = await crypto.subtle.encrypt(
       {
         name: "AES-GCM",
         iv,
+        additionalData: aadBytes || undefined,
       },
       key,
       encoder.encode(plainText)
@@ -110,8 +101,7 @@ const VaultCrypto = (() => {
     return toBase64(packed);
   }
 
-  // decrypt a base64 payload using a pre‑derived CryptoKey.
-  async function openTextWithKey(cipherBase64, key) {
+  async function openTextWithKey(cipherBase64, key, aadText = "") {
     try {
       const packed = fromBase64(cipherBase64);
 
@@ -121,10 +111,12 @@ const VaultCrypto = (() => {
 
       const iv = packed.slice(0, IV_BYTES);
       const cipherBytes = packed.slice(IV_BYTES);
+      const aadBytes = buildAadBytes(aadText);
       const plainBuffer = await crypto.subtle.decrypt(
         {
           name: "AES-GCM",
           iv,
+          additionalData: aadBytes || undefined,
         },
         key,
         cipherBytes
@@ -132,23 +124,30 @@ const VaultCrypto = (() => {
 
       return decoder.decode(plainBuffer);
     } catch (_error) {
-      throw new Error("Incorrect master password or corrupted vault");
+      throw new Error("Decryption failed.");
     }
+  }
+
+  async function sealText(plainText, masterPassword, saltBase64, iterations = KDF_ROUNDS, aadText = "") {
+    const key = await deriveVaultKey(masterPassword, saltBase64, iterations);
+    return sealTextWithKey(plainText, key, aadText);
+  }
+
+  async function openText(cipherBase64, masterPassword, saltBase64, iterations = KDF_ROUNDS, aadText = "") {
+    const key = await deriveVaultKey(masterPassword, saltBase64, iterations);
+    return openTextWithKey(cipherBase64, key, aadText);
   }
 
   return {
     KDF_ROUNDS,
     SALT_BYTES,
+    IV_BYTES,
+    KEY_BITS,
     deriveVaultKey,
-
-    // password-based helpers (legacy wrappers kept for compatibility)
     sealText,
     openText,
-
-    // key‑based helpers – preferred for lower exposure of the master password.
     sealTextWithKey,
     openTextWithKey,
-
     toBase64,
     fromBase64,
     randomBytes,
